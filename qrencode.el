@@ -4,7 +4,7 @@
 
 ;; Author: Rüdiger Sonderfeld <ruediger@c-plusplus.net>
 ;; Keywords: qrcode comm
-;; Version: 1.4
+;; Version: 1.5-beta3
 ;; Package-Requires: ((emacs "25.1"))
 ;; Package: qrencode
 ;; URL: https://github.com/ruediger/qrencode-el
@@ -48,7 +48,7 @@
 ;; Reed solomon ECC implementation based on https://research.swtch.com/field
 
 (defun qrencode--mul-no-lut (x y poly)
-  "Caryless-multiply  X and Y modulo POLY."
+  "Carryless-multiply X and Y modulo POLY."
   (let ((z 0))
     (while (> x 0)
       (when (/= (logand x 1) 0)
@@ -150,16 +150,16 @@ Optionally provide a FIELD and LGEN (log of generator polynomial)."
     ;; TODO(#11): Support other encodings
     (other (error "Mode %s not supported" other))))
 
-(defun qrencode--encode-byte (input version)
+(defun qrencode--encode-byte (input version &optional mode)
   "Return INPUT encoded in byte format for QR Code size VERSION.
-See Section 7.4 of ISO/IEC standard.  This code adds a 4 bit mode
+See Section 7.4 of ISO/IEC standard.  This code adds a 4 bit MODE
 indicator and then the character count in either 16 bit (for
 version > 9) or 8 bit, followed by input."
   (let* ((l (length input))
          (rest (logand l #xF)))
     (cl-assert (<= l (if (> version 9) 65535 255)))
     (vconcat
-     (vector (logior (ash (qrencode--mode 'byte) 4)
+     (vector (logior (ash (qrencode--mode (or mode 'byte)) 4)
                      ;; Version <=9 use 8 bit, larger 16 bit for size
                      (ash l (if (<= version 9) -4 -12))))
      (when (> version 9)
@@ -297,7 +297,7 @@ The square is initialised with INIT or 0."
 
 
     ;; Timing pattern
-    (cl-loop for i from 8 to (- size 8)
+    (cl-loop for i from 8 to (- size 9)
              do (qrencode--aaset qrcode 6 i (% (1+ i) 2))
              do (qrencode--aaset function-pattern 6 i 1)
              do (qrencode--aaset qrcode i 6 (% (1+ i) 2))
@@ -350,159 +350,174 @@ The square is initialised with INIT or 0."
                                             (setq row nrow
                                                   column ncolumn
                                                   up nup))
-                                       while (= (qrencode--aaref function-pattern row column) 1)))))))
+                                       while (= (qrencode--aaref function-pattern column row) 1)))))))
 
 
 ;;; Data masking
-(defun qrencode--penalty (qr)
-  "Return penalty (the higher the worse) for a given QR pattern."
 
+(defun qrencode--penalty-adjacency (qr)
+  "Return penalty of QR code for rule 1: Adjacency.
+Five or more adjacent modules of same colour."
+  ;; 1. Adjacency:
+  ;; More than 5 adjacent modules of same colour.
   (let ((size (length qr))
-        (penalty 0))
-
-    ;; 1. Adjacency:
-    ;; More than 5 adjacent modules of same colour.
-    (let ((N1 3))
-      ;; Scan columns
-      (let ((row 0) (col 0))
-        (while (< row (1- size))
-          (while (< col (1- size))
-            (if (= (qrencode--aaref qr col row)
-                   (qrencode--aaref qr (1+ col) row))
-                (let ((i 1))
-                  (while (and (< col (1- size)) (= (qrencode--aaref qr col row)
-                                                   (qrencode--aaref qr (1+ col) row)))
-                    (setq i (1+ i)
-                          col (1+ col)))
-                  (when (> i 5)
-                    (setq penalty (+ penalty N1 (- i 5)))))
-              (setq col (1+ col))))
-          (setq row (1+ row)
-                col 0)))
-
-      ;; Scan rows
-      (let ((row 0) (col 0))
+        (penalty 0)
+        (N1 3))
+    ;; Scan columns
+    (let ((row 0) (col 0))
+      (while (< row size)
         (while (< col (1- size))
-          (while (< row (1- size))
-            (if (= (qrencode--aaref qr col row)
-                   (qrencode--aaref qr col (1+ row)))
-                (let ((i 1))
-                  (while (and (< row (1- size)) (= (qrencode--aaref qr col row)
-                                                   (qrencode--aaref qr col (1+ row))))
-                    (setq i (1+ i)
-                          row (1+ row)))
-                  (when (> i 5)
-                    (setq penalty (+ penalty N1 (- i 5)))))
-              (setq row (1+ row))))
-          (setq col (1+ col)
-                row 0))))
-
-    ;; 2. Block (2×2 block) of modules of the same colour
-    (let ((N2 3))
-      (setq penalty (+ penalty
-                       (cl-loop for row from 0 below (1- size)
-                                sum (cl-loop for col from 0 below (1- size)
-                                             when (= (qrencode--aaref qr col row)
-                                                     (qrencode--aaref qr col (1+ row))
-                                                     (qrencode--aaref qr (1+ col) row)
-                                                     (qrencode--aaref qr (1+ col) (1+ row)))
-                                             sum N2)))))
-
-    ;; 3. 1:1:3:1:1 pattern
-    ;; Pattern: 4 light modules before/after 1011101. I.e., 00001011101 or 10111010000.
-    (let ((N3 40))
-      (let ((row 0) (col 0))
+          (if (= (qrencode--aaref qr col row)
+                 (qrencode--aaref qr (1+ col) row))
+              (let ((i 1))
+                (while (and (< col (1- size)) (= (qrencode--aaref qr col row)
+                                                 (qrencode--aaref qr (1+ col) row)))
+                  (setq i (1+ i)
+                        col (1+ col)))
+                (when (>= i 5)
+                  (setq penalty (+ penalty N1 (- i 5)))))
+            (setq col (1+ col))))
+        (setq row (1+ row)
+              col 0)))
+    ;; Scan rows
+    (let ((row 0) (col 0))
+      (while (< col size)
         (while (< row (1- size))
-          (while (< col (- size 10))
-            ;; Optimisation: Both patterns match in these spots
-            (when (and (= 0 (qrencode--aaref qr (+ col 1) row))
-                       (= 1 (qrencode--aaref qr (+ col 4) row))
-                       (= 0 (qrencode--aaref qr (+ col 5) row))
-                       (= 1 (qrencode--aaref qr (+ col 6) row))
-                       (= 0 (qrencode--aaref qr (+ col 9) row))
-                       (or (and
-                            ;; Pattern beginning with 0
-                            (= 0 (qrencode--aaref qr col row))
-                            ;; 0
-                            (= 0 (qrencode--aaref qr (+ col 2) row))
-                            (= 0 (qrencode--aaref qr (+ col 3) row))
-                            ;; 1
-                            (= 1 (qrencode--aaref qr (+ col 7) row))
-                            (= 1 (qrencode--aaref qr (+ col 8) row))
-                            ;; 0
-                            (= 1 (qrencode--aaref qr (+ col 10) row)))
-                           (and
-                            ;; Pattern ending with 0
-                            (= 1 (qrencode--aaref qr col row))
-                            ;; 0
-                            (= 1 (qrencode--aaref qr (+ col 2) row))
-                            (= 1 (qrencode--aaref qr (+ col 3) row))
-                            ;; 1
-                            (= 0 (qrencode--aaref qr (+ col 7) row))
-                            (= 0 (qrencode--aaref qr (+ col 8) row))
-                            ;; 0
-                            (= 0(qrencode--aaref qr (+ col 10) row)))))
-              (setq penalty (+ penalty N3)))
-            (setq col (1+ col)))
-          (setq row (1+ row)
-                col 0)))
-
-      (let ((row 0) (col 0))
-        (while (< col (1- size))
-          (while (< row (- size 10))
-            ;; Optimisation: Both patterns match in these spots
-            (when (and (= 0 (qrencode--aaref qr col (+ row 1)))
-                       (= 1 (qrencode--aaref qr col (+ row 4)))
-                       (= 0 (qrencode--aaref qr col (+ row 5)))
-                       (= 1 (qrencode--aaref qr col (+ row 6)))
-                       (= 0 (qrencode--aaref qr col (+ row 9)))
-                       (or (and
-                            ;; Pattern beginning with 0
-                            (= 0 (qrencode--aaref qr col row))
-                            ;; 0
-                            (= 0 (qrencode--aaref qr col (+ row 2)))
-                            (= 0 (qrencode--aaref qr col (+ row 3)))
-                            ;; 1
-                            (= 1 (qrencode--aaref qr col (+ row 7)))
-                            (= 1 (qrencode--aaref qr col (+ row 8)))
-                            ;; 0
-                            (= 1 (qrencode--aaref qr col (+ row 10))))
-                           (and
-                            ;; Pattern ending with 0
-                            (= 1 (qrencode--aaref qr col row))
-                            ;; 0
-                            (= 1 (qrencode--aaref qr col (+ row 2)))
-                            (= 1 (qrencode--aaref qr col (+ row 3)))
-                            ;; 1
-                            (= 0 (qrencode--aaref qr col (+ row 7)))
-                            (= 0 (qrencode--aaref qr col (+ row 8)))
-                            ;; 0
-                            (= 0(qrencode--aaref qr col (+ row 10))))))
-              (setq penalty (+ penalty N3)))
-            (setq row (1+ row)))
-          (setq col (1+ col)
-                row 0))))
-
-    ;; 4. Ratio of dark to light
-    (let ((N4 10)
-          (dark (cl-loop for row across qr
-                         sum (cl-loop for d across row sum d))))
-      (setq penalty
-            (+ penalty
-               ;; Every 5% deviation from 50% dark/white ratio is penalised.
-               (* (floor (/ (abs (- 0.5 (/ dark (* size size)))) 0.05) N4)))))
-
+          (if (= (qrencode--aaref qr col row)
+                 (qrencode--aaref qr col (1+ row)))
+              (let ((i 1))
+                (while (and (< row (1- size)) (= (qrencode--aaref qr col row)
+                                                 (qrencode--aaref qr col (1+ row))))
+                  (setq i (1+ i)
+                        row (1+ row)))
+                (when (>= i 5)
+                  (setq penalty (+ penalty N1 (- i 5)))))
+            (setq row (1+ row))))
+        (setq col (1+ col)
+              row 0)))
     penalty))
 
+(defun qrencode--penalty-blocks (qr)
+  "Return penalty for QR code for rule 2.
+Penalty for block (2×2 block) of modules of the same colour."
+  (let ((size (length qr))
+        (N2 3))
+    (cl-loop for row from 0 below (1- size)
+             sum (cl-loop for col from 0 below (1- size)
+                          when (= (qrencode--aaref qr col row)
+                                  (qrencode--aaref qr col (1+ row))
+                                  (qrencode--aaref qr (1+ col) row)
+                                  (qrencode--aaref qr (1+ col) (1+ row)))
+                          sum N2))))
+
+(defun qrencode--penalty-11311 (qr)
+  "Return penalty of QR code for rule 3: 1:1:3:1:1 pattern.
+Pattern: 4 light modules before/after 1011101. I.e., 00001011101 or 10111010000."
+  (let ((size (length qr))
+        (N3 40)
+        (penalty 0))
+    (let ((row 0) (col 0))
+      (while (< row size)
+        (while (< col (- size 10))
+          ;; Optimisation: Both patterns match in these spots
+          (when (and (= 0 (qrencode--aaref qr (+ col 1) row))
+                     (= 1 (qrencode--aaref qr (+ col 4) row))
+                     (= 0 (qrencode--aaref qr (+ col 5) row))
+                     (= 1 (qrencode--aaref qr (+ col 6) row))
+                     (= 0 (qrencode--aaref qr (+ col 9) row))
+                     (or (and
+                          ;; Pattern beginning with 0
+                          (= 0 (qrencode--aaref qr col row))
+                          ;; 0
+                          (= 0 (qrencode--aaref qr (+ col 2) row))
+                          (= 0 (qrencode--aaref qr (+ col 3) row))
+                          ;; 1
+                          (= 1 (qrencode--aaref qr (+ col 7) row))
+                          (= 1 (qrencode--aaref qr (+ col 8) row))
+                          ;; 0
+                          (= 1 (qrencode--aaref qr (+ col 10) row)))
+                         (and
+                          ;; Pattern ending with 0
+                          (= 1 (qrencode--aaref qr col row))
+                          ;; 0
+                          (= 1 (qrencode--aaref qr (+ col 2) row))
+                          (= 1 (qrencode--aaref qr (+ col 3) row))
+                          ;; 1
+                          (= 0 (qrencode--aaref qr (+ col 7) row))
+                          (= 0 (qrencode--aaref qr (+ col 8) row))
+                          ;; 0
+                          (= 0(qrencode--aaref qr (+ col 10) row)))))
+            (setq penalty (+ penalty N3)))
+          (setq col (1+ col)))
+        (setq row (1+ row)
+              col 0)))
+
+    (let ((row 0) (col 0))
+      (while (< col size)
+        (while (< row (- size 10))
+          ;; Optimisation: Both patterns match in these spots
+          (when (and (= 0 (qrencode--aaref qr col (+ row 1)))
+                     (= 1 (qrencode--aaref qr col (+ row 4)))
+                     (= 0 (qrencode--aaref qr col (+ row 5)))
+                     (= 1 (qrencode--aaref qr col (+ row 6)))
+                     (= 0 (qrencode--aaref qr col (+ row 9)))
+                     (or (and
+                          ;; Pattern beginning with 0
+                          (= 0 (qrencode--aaref qr col row))
+                          ;; 0
+                          (= 0 (qrencode--aaref qr col (+ row 2)))
+                          (= 0 (qrencode--aaref qr col (+ row 3)))
+                          ;; 1
+                          (= 1 (qrencode--aaref qr col (+ row 7)))
+                          (= 1 (qrencode--aaref qr col (+ row 8)))
+                          ;; 0
+                          (= 1 (qrencode--aaref qr col (+ row 10))))
+                         (and
+                          ;; Pattern ending with 0
+                          (= 1 (qrencode--aaref qr col row))
+                          ;; 0
+                          (= 1 (qrencode--aaref qr col (+ row 2)))
+                          (= 1 (qrencode--aaref qr col (+ row 3)))
+                          ;; 1
+                          (= 0 (qrencode--aaref qr col (+ row 7)))
+                          (= 0 (qrencode--aaref qr col (+ row 8)))
+                          ;; 0
+                          (= 0(qrencode--aaref qr col (+ row 10))))))
+            (setq penalty (+ penalty N3)))
+          (setq row (1+ row)))
+        (setq col (1+ col)
+              row 0)))
+    penalty))
+
+(defun qrencode--penalty-dark-light-ratio (qr)
+  "Return penalty of QR code for rule 4: Ratio of dark to light."
+  (let ((N4 10)
+        (size (length qr))
+        (dark (cl-loop for row across qr
+                       sum (cl-loop for d across row sum d))))
+    ;; Every 5% deviation from 50% dark/light ratio is penalised.
+    ;; (* (floor (/ (abs (- (/ (float dark) (* size size)) 0.5)) 0.05)) N4)
+    ;; Instead of using float we use integer arithmetic though to avoid
+    ;; rounding cases.
+    (* N4 (/ (abs (- (* 20 dark) (* 10 size size))) (* size size)))))
+
+(defun qrencode--penalty (qr)
+  "Return penalty (the higher the worse) for a given QR pattern."
+  (+
+   (qrencode--penalty-adjacency qr)          ;; Rule 1
+   (qrencode--penalty-blocks qr)             ;; Rule 2
+   (qrencode--penalty-11311 qr)              ;; Rule 3
+   (qrencode--penalty-dark-light-ratio qr))) ;; Rule 4
+
 (defconst qrencode--masks
-  [(lambda (i j) (= (% (+ i j) 2) 0))
-   (lambda (i _j) (= (% i 2) 0))
-   (lambda (_i j) (= (% j 3) 0))
-   (lambda (i j) (= (% (+ i j) 3) 0))
-   (lambda (i j) (= (% (+ (/ i 2) (/ j 3)) 2) 0))
-   (lambda (i j) (= (+ (% (* i j) 2) (% (* i j) 3)) 0))
-   (lambda (i j) (= (% (+ (% (* i j) 2) (% (* i j) 3)) 2) 0))
-   (lambda (i j) (= (% (+ (% (+ i j) 2) (% (* i j) 3)) 2) 0))]
+  (vector (lambda (i j) (= (% (+ i j) 2) 0))
+          (lambda (i _j) (= (% i 2) 0))
+          (lambda (_i j) (= (% j 3) 0))
+          (lambda (i j) (= (% (+ i j) 3) 0))
+          (lambda (i j) (= (% (+ (/ i 2) (/ j 3)) 2) 0))
+          (lambda (i j) (= (+ (% (* i j) 2) (% (* i j) 3)) 0))
+          (lambda (i j) (= (% (+ (% (* i j) 2) (% (* i j) 3)) 2) 0))
+          (lambda (i j) (= (% (+ (% (+ i j) 2) (% (* i j) 3)) 2) 0)))
   "Mask patterns.")
 
 (defun qrencode--copy (seq)
@@ -525,16 +540,18 @@ The square is initialised with INIT or 0."
                                                      (if (funcall m i j) 1 0)))))
     qr))
 
-(defun qrencode--find-best-mask (qr function-pattern)
-  "Return QR with best mask applied and mask number, avoiding FUNCTION-PATTERN."
+(defun qrencode--find-best-mask (qr function-pattern errcorr)
+  "Return QR with best mask applied and mask number, avoiding FUNCTION-PATTERN.
+This encodes ERRCORR and mask information."
   (let (bestqr (bestmask 0) (bestpenalty #xFFFFFFFF))
     (dotimes (mask (length qrencode--masks))
-      (let* ((newqr (qrencode--apply-mask qr function-pattern mask))
-             (penalty (qrencode--penalty newqr)))
-        (when (< penalty bestpenalty)
-          (setq bestqr newqr
-                bestmask mask
-                bestpenalty penalty))))
+      (let ((newqr (qrencode--apply-mask qr function-pattern mask)))
+        (qrencode--encode-info newqr errcorr mask)
+        (let ((penalty (qrencode--penalty newqr)))
+          (when (< penalty bestpenalty)
+            (setq bestqr newqr
+                  bestmask mask
+                  bestpenalty penalty)))))
     (cons bestqr bestmask)))
 
 ;;; Version/Info encoding
@@ -622,37 +639,33 @@ Optionally provide a MASK or #x5412 is used."
                       (qrencode--aaset qr (+ c1 a) (+ r1 b) val)
                       (qrencode--aaset qr (+ c2 b) (+ r2 a) val)))))))
 
-(defun qrencode--unused (_)
-  "This doesn't use _ but tricks the compiler.")
-
 ;; Analyse data: sizing etc.
 (defun qrencode--char-count-bits (version mode)
   "Return the number of bits per character given VERSION and MODE."
-  (cdr (assq mode
-             (pcase version
-               ((and n (guard (<= 1 n 9)))
-                (qrencode--unused n)
+  (or
+   (cdr (assq mode
+              (cond
+               ((<= 1 version 9)
                 '((numeric      . 10)
                   (alphanumeric .  9)
                   (byte         .  8)
                   (kanji        .  8)))
-               ((and n (guard (<= 10 n 26)))
-                (qrencode--unused n)
+               ((<= 10 version 26)
                 '((numeric      . 12)
                   (alphanumeric . 11)
                   (byte         . 16)
                   (kanji        . 10)))
-               ((and n (guard (<= 27 n 40)))
-                (qrencode--unused n)
+               ((<= 27 version 40)
                 '((numeric      . 14)
                   (alphanumeric . 13)
                   (byte         . 16)
                   (kanji        . 12)))
-               (other (error "Unsupported version %d (range 1 to 40)" other))))))
+               (t (error "Unsupported version %d (range 1 to 40)" version)))))
+   (error "Unknown mode %s" mode)))
 
 (defun qrencode--length-in-version (n version mode)
   "Return length of a string of size N in VERSION and MODE."
-  (+ n (ceiling (+ 4 (/ (qrencode--char-count-bits version mode) 8)))))
+  (+ n (ceiling (+ 4 (qrencode--char-count-bits version mode)) 8)))
 
 (defconst qrencode--size-table
   [(26 . ((L . ( 7 3 1))
@@ -873,10 +886,12 @@ is `byte'.  If RETURN-RAW is set a raw vector version of the
 QRCode is returned instead of a formatted string."
   ;; Following Section 7.1 from ISO/IEC 18004 2015
 
-  (let (version raw-bytes data qr function-pattern datamask)
+  (let (version raw-bytes data qr function-pattern)
     ;; Step 1: Analyse data
     ;; TODO(#11): find suitable mode. For now we only support byte
     (setq mode (or mode 'byte))
+    ;; Signals in case of unsupported mode
+    (qrencode--mode mode)
     ;; Convert Emacs internal encoded characters into raw UTF-8 bytes
     (setq raw-bytes (encode-coding-string s 'utf-8))
     ;; Find the version with the highest error correction to fit the data
@@ -885,15 +900,15 @@ QRCode is returned instead of a formatted string."
             errcorr ec))
 
     ;; Step 2: Encode data
-    (setq data (qrencode--encode-byte raw-bytes version))
+    (setq data (qrencode--encode-byte raw-bytes version mode))
     ;; Add padding
     (let* ((size-table (aref qrencode--size-table (1- version)))
            (qrlen (car size-table))
            (errcorrlen (cadr (assq errcorr (cdr size-table))))
            (datalen (- qrlen errcorrlen))
            (padding [#xEC #x11]))
-      (setq data (vconcat data [#x40]  ; TODO: why the #x40?
-                          (cl-loop for i from 0 below (- datalen (length data) 1)
+      (setq data (vconcat data
+                          (cl-loop for i from 0 below (- datalen (length data))
                                    vconcat (vector (aref padding (% i 2))))))
 
       ;; Step 3: Error correction coding
@@ -921,14 +936,15 @@ QRCode is returned instead of a formatted string."
       (setq qr qrcode
             function-pattern fp))
 
-    ;; Step 6: Data masking
-    (pcase-let ((`(,qrcodemasked . ,mask) (qrencode--find-best-mask qr function-pattern)))
-      (setq qr qrcodemasked
-            datamask mask))
-
-    ;; Step 7: Format and version information
-    (qrencode--encode-info qr errcorr datamask)
+    ;; Step 7: Format and version information.
+    ;; The steps are out of order here since the masking gets impacted
+    ;; by the format and version information.  We encode version here
+    ;; the format information is encoded as part of find-best-mask.
     (qrencode--encode-version qr version)
+
+    ;; Step 6: Data masking
+    (pcase-let ((`(,qrcodemasked . ,_mask) (qrencode--find-best-mask qr function-pattern errcorr)))
+      (setq qr qrcodemasked))
 
     (if return-raw
         qr
@@ -1018,7 +1034,7 @@ FILENAME of the exported file is passed as parameter.  For
 example this can be used to convert the output to a different
 bitmap format."
   :type 'hook
-  :package-version "1.2-beta1"
+  :package-version '(qrencode . "1.2-beta1")
   :group 'qrencode)
 
 (defface qrencode-face
@@ -1060,18 +1076,17 @@ Commands:
 
 (defun qrencode--encode-to-buffer (s)
   "Encode S as QR Code and insert into `qrencode-buffer-name`."
-  (save-excursion
-    (let ((buf (get-buffer-create qrencode-buffer-name)))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (qrencode-mode)
-          (setq-local line-spacing nil)  ; ensure no line spacing
-          (setq-local qrencode--raw-qr (qrencode s nil nil 'return-raw))
-          (insert (propertize (qrencode-format qrencode--raw-qr) 'face 'qrencode-face))
-          (insert "\nEncoded Text:\n" s)
-          (goto-char (point-min)))
-        (pop-to-buffer buf)))))
+  (let ((buf (get-buffer-create qrencode-buffer-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (qrencode-mode)
+        (setq-local line-spacing nil)  ; ensure no line spacing
+        (setq-local qrencode--raw-qr (qrencode s nil nil 'return-raw))
+        (insert (propertize (qrencode-format qrencode--raw-qr) 'face 'qrencode-face))
+        (insert "\nEncoded Text:\n" s)
+        (goto-char (point-min))))
+    (pop-to-buffer buf)))
 
 
 ;;;###autoload
@@ -1095,8 +1110,8 @@ Commands:
 When called interactively, read STR with `read-string'."
   (interactive "sString: ")
   (let ((trimmed-str (string-trim str)))
-    (if (string-empty-p trimmed-str)
-	(user-error "Empty string"))
+    (when (string-empty-p trimmed-str)
+      (user-error "Empty string"))
     (qrencode--encode-to-buffer trimmed-str)))
 
 (provide 'qrencode)

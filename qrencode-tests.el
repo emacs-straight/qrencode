@@ -42,13 +42,14 @@
     (should (= (qrencode--field-exp field 1) 2))))
 
 (ert-deftest qrencode-ecc-test ()
+  "Compare ECC encoding against known value."
   (let ((data [#x10 #x20 #x0c #x56 #x61 #x80 #xec #x11 #xec #x11 #xec #x11 #xec #x11 #xec #x11])
         (check [#xa5 #x24 #xd4 #xc1 #xed #x36 #xc7 #x87 #x2c #x55]))
     (should (equal (qrencode--ecc data (length check)) check))))
 
 (ert-deftest qrencode-ecc-linear-test ()
   (let ((field (qrencode--init-field #x11d 2)))
-    
+
     (should (equal (qrencode--ecc [#x00 #x00] 2 field) [#x00 #x00]))
 
     (let* ((c1 (qrencode--ecc [#x00 #x01] 2 field))
@@ -60,6 +61,7 @@
 ;;; Util
 
 (ert-deftest qrencode-size-test ()
+  "Verify known sizes."
   (should (= (qrencode--size 1) 21))
   (should (= (qrencode--size 2) 25))
   (should (= (qrencode--size 6) 41))
@@ -129,7 +131,8 @@
     (should (= (qrencode--aaref s 6 11) 0))))
 
 (ert-deftest qrencode-template-test ()
-  (pcase-let ((`(,qr . ,fp) (qrencode--template  1)))  ; TODO: Maybe test a version with alignment pattern
+  "Test basic templates."
+  (pcase-let ((`(,qr . ,fp) (qrencode--template  1))) ; TODO: Maybe test a version with alignment pattern
     (should (equal qr [[1 1 1 1 1 1 1 0 0 0 0 0 0 0 1 1 1 1 1 1 1]
                        [1 0 0 0 0 0 1 0 0 0 0 0 0 0 1 0 0 0 0 0 1]
                        [1 0 1 1 1 0 1 0 0 0 0 0 0 0 1 0 1 1 1 0 1]
@@ -177,53 +180,133 @@
 ;; TODO: Test qrencode--draw-data
 
 ;;; Data masking
-(ert-deftest qrencode-penalty-test ()
-  ;; Exactly five same colour should not incur penalty
-  (should (< (qrencode--penalty [[1 1 1 1 1 0]
-                                 [0 1 0 1 0 1]
-                                 [1 0 1 0 1 0]
-                                 [0 1 0 1 0 1]
-                                 [1 0 1 0 1 0]
-                                 [0 1 0 1 0 1]])
+(ert-deftest qrencode-penalty-adjacency-test ()
+  "Test rule 1 penalties."
+  ;; Exactly four same colour should not incur penalty
+  (should (= (qrencode--penalty-adjacency [[1 1 1 1 0 0]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]])
+             0))
+  ;; Exactly five same colour should incur penalty
+  (should (= (qrencode--penalty-adjacency [[1 1 1 1 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]])
              3))
   ;; Six of same colour should incurs penalty
-  (should (>= (qrencode--penalty [[1 1 1 1 1 1]
-                                  [0 1 0 1 0 1]
-                                  [1 0 1 0 1 0]
-                                  [0 1 0 1 0 1]
-                                  [1 0 1 0 1 0]
-                                  [0 1 0 1 0 1]])
-              3))
+  (should (= (qrencode--penalty-adjacency [[1 1 1 1 1 1]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]])
+             4))
   ;; Six of same colour should incurs penalty (different row)
-  (should (>= (qrencode--penalty [[0 1 0 1 0 1]
-                                  [1 1 1 1 1 1]
-                                  [1 0 1 0 1 0]
-                                  [0 1 0 1 0 1]
-                                  [1 0 1 0 1 0]
-                                  [0 1 0 1 0 1]])
-              3))
+  (should (= (qrencode--penalty-adjacency [[0 1 0 1 0 1]
+                                           [1 1 1 1 1 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]])
+             4))
   ;; Six of same colour should incurs penalty (cols)
-  (should (>= (qrencode--penalty [[0 1 0 1 0 1]
-                                  [1 1 0 1 1 0]
-                                  [1 1 1 0 1 0]
-                                  [0 1 0 1 0 1]
-                                  [1 1 1 0 1 0]
-                                  [0 1 0 1 0 1]])
-             3))
-  ;; 1:1:3:1:1 penalty
-  (should (>= (qrencode--penalty [[1 0 1 0 1 0 0 1 0 1 0]
-                                  [0 0 0 0 1 0 1 1 1 0 1]
-                                  [1 0 1 0 1 0 1 0 1 0 1]
-                                  [0 1 0 1 0 1 0 1 0 1 0]
-                                  [1 0 1 0 1 0 1 0 1 0 1]
-                                  [0 1 0 1 0 1 0 1 0 1 0]
-                                  [1 0 1 0 1 0 1 0 1 0 1]
-                                  [0 1 0 1 0 1 0 1 0 1 0]
-                                  [1 0 1 0 1 0 1 0 1 0 1]
-                                  [0 1 0 1 0 1 0 1 0 1 0]
-                                  [1 0 1 0 1 0 1 0 1 0 1]])
-              40)))
+  (should (= (qrencode--penalty-adjacency [[0 1 0 1 0 1]
+                                           [1 1 0 1 1 0]
+                                           [1 1 1 0 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 1 1 0 1 0]
+                                           [0 1 0 1 0 1]])
+             4))
+  ;; Six of same colour should incurs penalty (last row)
+  (should (= (qrencode--penalty-adjacency [[0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 0]
+                                           [0 1 0 1 0 1]
+                                           [1 1 1 1 1 1]])
+             4))
+  ;; Six of same colour should incurs penalty (last cols)
+  (should (= (qrencode--penalty-adjacency [[1 0 1 0 1 1]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 1]
+                                           [0 1 0 1 0 1]
+                                           [1 0 1 0 1 1]
+                                           [0 1 0 1 0 1]])
+             4)))
 
+(ert-deftest qrencode-penalty-blocks-test ()
+  "Test 2x2 block rule"
+  (should (= (qrencode--penalty-blocks [[0 1 0 1 0 1]
+                                        [1 1 0 1 1 0]
+                                        [1 1 1 0 1 0]
+                                        [0 1 0 1 0 1]
+                                        [1 1 1 0 1 0]
+                                        [0 1 0 1 0 1]])
+             3)))
+
+(ert-deftest qrencode-penalty-11311-test ()
+ "Test 1:1:3:1:1 penalty"
+ (should (= (qrencode--penalty-11311
+              [[1 0 1 0 1 0 0 1 0 1 0]
+               [0 0 0 0 1 0 1 1 1 0 1]
+               [1 0 1 0 1 0 1 0 1 0 1]
+               [0 1 0 1 0 1 0 1 0 1 0]
+               [1 0 1 0 1 0 1 0 1 0 1]
+               [0 1 0 1 0 1 0 1 0 1 0]
+               [1 0 1 0 1 0 1 0 1 0 1]
+               [0 1 0 1 0 1 0 1 0 1 0]
+               [1 0 1 0 1 0 1 0 1 0 1]
+               [0 1 0 1 0 1 0 1 0 1 0]
+               [1 0 1 0 1 0 1 0 1 0 1]])
+             40)))
+
+(ert-deftest qrencode-penalty-dark-light-ratio-test ()
+  "Test dark light ratio penalty."
+  (should (= (qrencode--penalty-dark-light-ratio
+              [[1 1 0 1 0 1]
+               [1 0 1 0 1 0]
+               [0 1 0 1 0 1]
+               [1 0 1 0 1 0]
+               [0 1 0 1 0 1]
+               [1 0 1 0 1 1]])
+             10)))
+
+(ert-deftest qrencode-no-penalty-test ()
+  "Checker board should be zero penalty."
+  (should (= (qrencode--penalty [[0 1 0 1 0 1]
+                                 [1 0 1 0 1 0]
+                                 [0 1 0 1 0 1]
+                                 [1 0 1 0 1 0]
+                                 [0 1 0 1 0 1]
+                                 [1 0 1 0 1 0]])
+             0)))
+
+(ert-deftest qrencode-penalty-test ()
+  "`qrencode--penalty' must be the sum of all four rules."
+  (let ((qr [[1 0 1 0 1 0 0 1 0 1 0]
+             [0 0 0 0 1 0 1 1 1 0 1]
+             [1 0 1 0 1 0 1 0 1 0 1]
+             [1 1 0 1 0 1 0 1 0 1 0]
+             [1 0 1 0 1 0 1 0 1 0 1]
+             [0 1 0 1 1 1 0 1 0 1 0]
+             [1 0 1 0 1 0 1 0 1 0 1]
+             [0 1 0 1 0 1 0 1 1 1 0]
+             [1 1 1 1 1 1 1 0 1 0 1]
+             [1 1 0 1 0 1 0 1 0 1 0]
+             [1 0 1 0 1 0 1 0 1 0 1]]))
+    ;; This board trips every rule, so a missing term cannot cancel out:
+    ;; 5 (a run of seven) + 3 (one 2x2 block) + 40 (one 1:1:3:1:1) +
+    ;; 10 (67/121 = 55.4% dark, one 5% step from half).
+    (should (= (qrencode--penalty-adjacency qr) 5))
+    (should (= (qrencode--penalty-blocks qr) 3))
+    (should (= (qrencode--penalty-11311 qr) 40))
+    (should (= (qrencode--penalty-dark-light-ratio qr) 10))
+    (should (= (qrencode--penalty qr) 58))))
 
 (ert-deftest qrencode-masks-test ()
   (should (equal (qrencode--apply-mask (qrencode--square 10) (qrencode--square 10) 0)
@@ -264,7 +347,55 @@
 
 ;; TODO: test find-best-mask
 
+(ert-deftest qrencode-function-patterns-intact-test ()
+  "Finder, separator, timing and alignment modules must survive encoding."
+  (dolist (input '("hello" "https://github.com/ruediger/qrencode-el"))
+    (let* ((qr (qrencode input nil nil 'return-raw))
+           (size (length qr))
+           (version (/ (- size 17) 4)))
+      (pcase-let ((`(,template . ,fp) (qrencode--template version)))
+        (dotimes (y size)
+          (dotimes (x size)
+            ;; Skip the areas written after templating: format info, version
+            ;; info and the dark module.
+            (unless (or (= x 8) (= y 8)
+                        (and (>= version 7)
+                             (or (and (< x 6) (>= y (- size 11)) (< y (- size 8)))
+                                 (and (< y 6) (>= x (- size 11)) (< x (- size 8))))))
+              (when (= 1 (qrencode--aaref fp x y))
+                (should (= (qrencode--aaref qr x y)
+                           (qrencode--aaref template x y)))))))
+        ;; Dark module, section 7.9.1.
+        (should (= 1 (qrencode--aaref qr 8 (- size 8))))))))
+
 ;;; Version/Info encoding
+
+;; Helper functions
+(defun qrencode-tests--format-bits (qr position)
+  "Return the 15-bit format information word read from QR.
+POSITION is `top-left' for the top-left copy, `bottom+right' for the split
+copy along the right and bottom edges."
+  (let ((size (length qr))
+        (v 0))
+    (dotimes (i 15)
+      (let ((bit (if (eq position 'top-left)
+                     (cond ((<= i 5) (qrencode--aaref qr 8 i))
+                           ((= i 6)  (qrencode--aaref qr 8 7))
+                           ((= i 7)  (qrencode--aaref qr 8 8))
+                           ((= i 8)  (qrencode--aaref qr 7 8))
+                           (t        (qrencode--aaref qr (- 14 i) 8)))
+                   (if (<= i 7)
+                       (qrencode--aaref qr (- size 1 i) 8)
+                     (qrencode--aaref qr 8 (+ (- size 7) (- i 8)))))))
+        (setq v (logior v (ash bit i)))))
+    v))
+
+(defun qrencode-tests--decode-format (qr)
+  "Return (ERRCORR . MASK) decoded from QR's format information."
+  (let* ((raw (qrencode-tests--format-bits qr 1))
+         (data (ash (logxor raw #x5412) -10)))
+    (cons (car (rassq (ash data -3) '((L . 1) (M . 0) (Q . 3) (H . 2))))
+          (logand data 7))))
 
 (ert-deftest qrencode-bch-encode-test ()
   ;; Section 7.9.1. Err corr: M, Mask 5 (101) -> 0b100000011001110
@@ -277,11 +408,69 @@
 (ert-deftest qrencode--mod-test ()
   (should (= (qrencode--mod 0 #x537) 0)))
 
-;; TODO test: encode-info encode-version
+(ert-deftest qrencode-format-info-conformance-test ()
+  "Both copies of the format information must agree and be a valid BCH word."
+  (dolist (input '("hello"
+                   "https://github.com/ruediger/qrencode-el"
+                   "0123456789"
+                   "x"))
+    (let* ((qr (qrencode input nil nil 'return-raw))
+           (c1 (qrencode-tests--format-bits qr 'top-left))
+           (c2 (qrencode-tests--format-bits qr 'bottom+right)))
+      ;; The two copies are redundant: they must be identical.
+      (should (= c1 c2))
+      ;; It must be a well-formed BCH(15,5) word masked with 0x5412.
+      (pcase-let ((`(,ec . ,mask) (qrencode-tests--decode-format qr)))
+        (should (memq ec '(L M Q H)))
+        (should (<= 0 mask 7))
+        (should (= c1 (qrencode--bch-encode
+                       (logior (ash (qrencode--errcorr ec) 3) mask))))))))
 
-(ert-deftest qrencode--find-version ()
-  (should (equal (qrencode--find-version 39 'byte) '(3 . M)))
-  (should (equal (qrencode--find-version 14 'byte) '(1 . L))))
+(ert-deftest qrencode-version-info-conformance-test ()
+  "Version information must be present, doubled and correct for version >= 7.
+  The expected word for version 7 is the literal from section 7.10 of the
+  standard, so this does not lean on `qrencode--version-ecc' as its own oracle."
+  (dolist (n '(150 271 900))
+    (let* ((qr (qrencode (make-string n ?a) nil nil 'return-raw))
+           (size (length qr))
+           (version (/ (- size 17) 4))
+           (bl 0) (tr 0))
+      (should (>= version 7))
+      (dotimes (i 18)
+        (let ((a (/ i 3)) (b (% i 3)))
+          (setq bl (logior bl (ash (qrencode--aaref qr a (+ (- size 11) b)) i))
+                tr (logior tr (ash (qrencode--aaref qr (+ (- size 11) b) a) i)))))
+      ;; The two copies are redundant: they must be identical.
+      (should (= bl tr))
+      (when (= version 7)
+        (should (= bl #x07C94))))))
+
+(ert-deftest qrencode--find-version-test ()
+  "Selection must match the byte-mode capacities of ISO/IEC 18004 Table 7."
+  ;; Version 1 holds 17 (L), 14 (M), 11 (Q), 7 (H) bytes.  Check each
+  ;; capacity and the byte that overflows it: an error in the header
+  ;; overhead shifts every one of these boundaries.
+  (should (equal (qrencode--find-version  7 'byte) '(1 . H)))
+  (should (equal (qrencode--find-version  8 'byte) '(1 . Q)))
+  (should (equal (qrencode--find-version 11 'byte) '(1 . Q)))
+  (should (equal (qrencode--find-version 12 'byte) '(1 . M)))
+  (should (equal (qrencode--find-version 14 'byte) '(1 . M)))
+  (should (equal (qrencode--find-version 15 'byte) '(1 . L)))
+  (should (equal (qrencode--find-version 17 'byte) '(1 . L)))
+  (should (equal (qrencode--find-version 18 'byte) '(2 . Q)))
+  ;; The character count indicator grows from 8 to 16 bits at version 10,
+  ;; so the overhead goes from 2 to 3 codewords across this boundary.
+  ;; Table 7: 230 bytes at 9-L, 271 at 10-L.
+  (should (equal (qrencode--find-version 230 'byte) '(9 . L)))
+  (should (equal (qrencode--find-version 231 'byte) '(10 . L)))
+  ;; Largest payload the format can carry, Table 7: 2953 at 40-L.
+  (should (equal (qrencode--find-version 2953 'byte) '(40 . L)))
+  (should-error (qrencode--find-version 2954 'byte) :type 'user-error)
+  ;; An explicit level takes the other branch of the function.
+  (should (equal (qrencode--find-version 100 'byte 'H) '(10 . H)))
+  (should (equal (qrencode--find-version 100 'byte 'L) '(5 . L)))
+  (should (equal (qrencode--find-version 1273 'byte 'H) '(40 . H)))
+  (should-error (qrencode--find-version 1274 'byte 'H) :type 'user-error))
 
 ;; Analyse data
 
@@ -348,25 +537,25 @@
 ")))
 
 (ert-deftest qrencode-zbarimg-test ()
+  "Test decoding generated QRCodes using the zbarimg program."
   (let ((zbarimg (executable-find "zbarimg")))
-    (if (null zbarimg)
-        (message "zbarimg not found.  Not running all tests!")
-      (let ((tmpfile (make-temp-file "qr" nil ".pbm")))
-        (cl-loop for input across
-                 ["hello"
-                  "https://github.com/ruediger/qrencode-el"
-                  "hellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohello"
-                  "qrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqr"
+    (skip-unless zbarimg)
+    (let ((tmpfile (make-temp-file "qr" nil ".pbm")))
+      (cl-loop for input across
+               ["hello"
+                "https://github.com/ruediger/qrencode-el"
+                "hellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohello"
+                "qrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqrqr"
 
-                  ;; escaped Unicode characters
-                  "\U0001f600\U0001f680\u3042"
-                  ;; raw UTF-8 characters
-                  "😸🚗愛"
-                  ]
-                 do (with-temp-file tmpfile
-                      (insert (qrencode-format-as-netpbm (qrencode input nil nil 'return-raw))))
-                 do (should (string= (shell-command-to-string (format "%s -q '%s'" zbarimg tmpfile))
-                                     (format "QR-Code:%s\n" input))))))))
+                ;; escaped Unicode characters
+                "\U0001f600\U0001f680\u3042"
+                ;; raw UTF-8 characters
+                "😸🚗愛"
+                ]
+               do (with-temp-file tmpfile
+                    (insert (qrencode-format-as-netpbm (qrencode input nil nil 'return-raw))))
+               do (should (string= (shell-command-to-string (format "%s -q '%s'" zbarimg tmpfile))
+                                   (format "QR-Code:%s\n" input)))))))
 
 (provide 'qrencode-tests)
 ;;; qrencode-tests.el ends here
