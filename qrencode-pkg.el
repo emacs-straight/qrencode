@@ -1,2 +1,2 @@
 ;; Generated package description from qrencode.el  -*- no-byte-compile: t; lexical-binding:t -*-
-(define-package "qrencode" "1.5.0.20260925.1" "QRCode encoder" '((emacs "25.1")) :commit "472c492b2259484b87edb9bdc32d3fffab953432" :authors '(("Rüdiger Sonderfeld" . "ruediger@c-plusplus.net")) :maintainer '("Rüdiger Sonderfeld" . "ruediger@c-plusplus.net") :keywords '("qrcode" "comm") :url "https://github.com/ruediger/qrencode-el")
+(define-package "qrencode" "1.6beta1.0.20260926.5" "QRCode encoder" '((emacs "25.1")) :commit "daae774935d0425a1c3607e79a1deee27f53e10b" :authors '(("Rüdiger Sonderfeld" . "ruediger@c-plusplus.net")) :maintainer '("Rüdiger Sonderfeld" . "ruediger@c-plusplus.net") :keywords '("qrcode" "comm") :url "https://github.com/ruediger/qrencode-el")
